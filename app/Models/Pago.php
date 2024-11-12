@@ -7,6 +7,7 @@ class Pago extends Model
 {
     protected $fillable = [
         'prestamo_id',
+        'cuota_id',
         'cliente_id',
         'monto_abonado',
         'tipo_pago',
@@ -37,42 +38,44 @@ public function prestamo()
     return $this->belongsTo(Prestamo::class);
 }
 
-
-}
-
-
-
-    
-/* 
-    protected static function booted()
-{
-    static::creating(function ($pago) {
+protected static function booted(){
+    static::created(function ($pago) {
         $prestamo = Prestamo::find($pago->prestamo_id);
 
-        if ($prestamo) {
-            $montoTotal = $prestamo->monto_total;
-            $pagosRealizados = $prestamo->pagos()->sum('monto_abonado');
+        // Verificar que se ha seleccionado una cuota y que el tipo de pago no sea total
+        if ($pago->tipo_pago === 'cuota' && $pago->cuota) {
+            if ($pago->monto_abonado >= $pago->cuota->total) {
+                // Si el monto abonado es suficiente para cubrir la cuota completa
+                $pago->cuota->update(['estado' => 'pagada']);
+            }
+        } elseif ($pago->tipo_pago === 'total') {
+            // Cambiar el estado de todas las cuotas pendientes a "pagada" si es un pago total
+            if ($prestamo) {
+                Cuota::where('prestamo_id', $prestamo->id)
+                     ->where('estado', 'pendiente')
+                     ->update(['estado' => 'pagada']);
+            }
+        } elseif ($pago->tipo_pago === 'otro') {
+            // Si se selecciona pagar "Otro Valor"
+            if ($pago->cuota) {
+                $saldoCuota = $pago->cuota->total - $pago->cuota->pagos()->sum('monto_abonado');
+                if ($pago->monto_abonado >= $saldoCuota) {
+                    // Marcar la cuota como pagada si el monto abonado cubre el saldo pendiente de la cuota
+                    $pago->cuota->update(['estado' => 'pagada']);
+                }
+            }
 
-            // Calcula el saldo pendiente
-            $pago->saldo_pendiente = $montoTotal - ($pagosRealizados + $pago->monto_abonado);
+            // Si el pago cubre la deuda total pendiente, marcar todas las cuotas como pagadas
+            $saldoPrestamo = $prestamo->monto_total - $prestamo->pagos()->sum('monto_abonado');
+            if ($pago->monto_abonado >= $saldoPrestamo) {
+                Cuota::where('prestamo_id', $prestamo->id)
+                     ->where('estado', 'pendiente')
+                     ->update(['estado' => 'pagada']);
+            }
         }
     });
+}
 
-
-
-        // Evento al actualizar un pago existente
-        static::updating(function ($pago) {
-            $prestamo = Prestamo::find($pago->prestamo_id);
-
-            if ($prestamo) {
-                // Recalcular todos los pagos, incluyendo el actual
-                $pagosRealizados = $prestamo->pagos()
-                    ->where('id', '!=', $pago->id) // Excluir el pago que estamos actualizando
-                    ->sum('monto_abonado');
-                
-                $pago->saldo_pendiente = $prestamo->monto_total - ($pagosRealizados + $pago->monto_abonado);
-            }
-        });
-    } */
+}
 
 

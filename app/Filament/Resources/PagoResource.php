@@ -7,6 +7,7 @@ use App\Models\Cliente;
 use App\Models\Pago;
 use App\Models\Prestamo;
 use Filament\Forms;
+use Filament\Forms\Components\Hidden;
 use Filament\Forms\Components\Radio;
 use Filament\Forms\Components\Select;
 use Filament\Forms\Components\TextInput;
@@ -37,9 +38,11 @@ class PagoResource extends Resource
                         if ($cliente) {
                             $set('numero_documento', $cliente->numero_documento);
                             $prestamo = $cliente->prestamos()->whereNotNull('monto_total')->latest()->first();
+
                             if ($prestamo) {
                                 $saldoPendiente = $prestamo->monto_total - $prestamo->pagos()->sum('monto_abonado');
                                 $set('monto_total', $saldoPendiente);
+                                $set('prestamo_id', $prestamo->id);
                             } else {
                                 $set('monto_total', 'Sin deuda');
                             }
@@ -54,51 +57,30 @@ class PagoResource extends Resource
                     ->label('Deuda Total')
                     ->disabled(),
 
-                
+                Hidden::make('prestamo_id')
+                    ->default(function (callable $get) {
+                        return $get('prestamo_id');
+                    }),
+
                     Select::make('cuota_id')
                     ->label('Cuota a Pagar')
                     ->options(function (callable $get) {
-                        $clienteId = $get('cliente_id');
-                        if (!$clienteId) return [];
+                        $prestamoId = $get('prestamo_id');
+                        if (!$prestamoId) return [];
                 
-                        $prestamo = Prestamo::where('cliente_id', $clienteId)->latest()->first();
-                        if ($prestamo) {
-                            // Filtrar solo las cuotas pendientes del préstamo
-                            return $prestamo->cuotas()
-                                ->where('estado', 'pendiente')
-                                ->pluck('numero_cuota', 'id');
-                        }
-                        return [];
+                        // Obtener solo la primera cuota pendiente del préstamo seleccionado
+                        return Prestamo::find($prestamoId)
+                            ->cuotas()
+                            ->where('estado', 'pendiente')
+                            ->orderBy('numero_cuota', 'asc') // Ordena por número de cuota en orden ascendente
+                            ->limit(1) // Limita la consulta a una cuota
+                            ->pluck('numero_cuota', 'id');
                     })
                     ->reactive()
                     ->required()
-                    ->afterStateUpdated(function (callable $get, callable $set) {
-                        $clienteId = $get('cliente_id');
-                        if ($clienteId) {
-                            $prestamo = Prestamo::where('cliente_id', $clienteId)->latest()->first();
-                            if ($prestamo) {
-                                // Guardar el id del préstamo seleccionado
-                                $set('prestamo_id', $prestamo->id);
-                            }
-                        }
-                    }),
-                
-                    Select::make('prestamo_id')
-                    ->label('N* del Préstamo')
-                    ->options(function (callable $get) {
-                        $clienteId = $get('cliente_id');
-                        if (!$clienteId) return [];
-                
-                        return Prestamo::where('cliente_id', $clienteId)->pluck('id', 'id');
-                    })
-                    ->reactive()
-                    ->required()
-                    ->hidden(fn(callable $get) => !$get('cliente_id')), // Mostrar solo si se selecciona un cliente
-                
-                
+                    ->dehydrated(), // Asegúrate de que el valor se guarde en el modelo
                     
 
-                // Campo tipo de pago
                 Radio::make('tipo_pago')
                     ->label('¿Qué valor quiere pagar?')
                     ->options([
@@ -117,26 +99,22 @@ class PagoResource extends Resource
 
                             if ($prestamo) {
                                 if ($tipoPago === 'cuota') {
-                                    // Monto de una cuota
                                     $set('monto_abonado', $prestamo->valor_cuota);
                                 } elseif ($tipoPago === 'total') {
-                                    // Monto total pendiente
                                     $saldoPendiente = $prestamo->monto_total - $prestamo->pagos()->sum('monto_abonado');
                                     $set('monto_abonado', $saldoPendiente);
+
                                 } else {
-                                    // Limpiar para el monto personalizado
                                     $set('monto_abonado', null);
                                 }
 
-                                // Actualizar el saldo pendiente basado en el monto abonado
                                 $montoAbonado = $get('monto_abonado') ?? 0;
                                 $saldoPendiente = ($prestamo->monto_total - $prestamo->pagos()->sum('monto_abonado')) - $montoAbonado;
-                                $set('saldo_pendiente', max($saldoPendiente, 0)); // Evitar valores negativos
+                                $set('saldo_pendiente', max($saldoPendiente, 0));
                             }
                         }
                     }),
 
-                // Campo monto abonado
                 TextInput::make('monto_abonado')
                     ->label('Valor a Abonar')
                     ->numeric()
@@ -168,10 +146,7 @@ class PagoResource extends Resource
                             }
                         }
                     })
-                    ->dehydrated(), // Asegura que el valor se envíe al guardarlo
-
-
-
+                    ->dehydrated(),
 
                 TextInput::make('saldo_pendiente')
                     ->label('Saldo Pendiente')
@@ -204,42 +179,26 @@ class PagoResource extends Resource
     {
         static::creating(function (Pago $pago) {
             $prestamo = Prestamo::where('cliente_id', $pago->cliente_id)->latest()->first();
-    
+
             if (!$prestamo) {
                 throw new \Exception('El préstamo seleccionado no existe.');
             }
-    
-            // Calcular el saldo pendiente después de aplicar el monto abonado
+
             $deudaTotal = $prestamo->monto_total - $prestamo->pagos()->sum('monto_abonado');
             $saldoPendiente = $deudaTotal - $pago->monto_abonado;
-    
-            // Validar si el monto abonado es mayor a la deuda total
+
             if ($pago->monto_abonado > $deudaTotal) {
                 throw new \Exception('El monto abonado no puede ser mayor que la deuda total.');
             }
-    
-            // Actualizar el saldo pendiente y el préstamo
+
             $pago->saldo_pendiente = max($saldoPendiente, 0);
             $prestamo->saldo_pendiente = $pago->saldo_pendiente;
             $prestamo->save();
-    
-            // Si se seleccionó el tipo de pago "total"
-            if ($pago->tipo_pago === 'total') {
-                // Marcar todas las cuotas como "pagadas"
-                $prestamo->cuotas()->where('estado', 'pendiente')->update(['estado' => 'pagada']);
-            } else if ($pago->tipo_pago === 'cuota') {
-                // Marcar solo la cuota seleccionada como "pagada"
-                $cuota = $prestamo->cuotas()->where('id', $pago->cuota_id)->first();
-                if ($cuota) {
-                    $cuota->estado = 'pagada';
-                    $cuota->save();
-                }
-            }
+
         });
     }
+
     
-
-
 
     public static function table(Table $table): Table
     {
@@ -275,4 +234,3 @@ class PagoResource extends Resource
         ];
     }
 }
-

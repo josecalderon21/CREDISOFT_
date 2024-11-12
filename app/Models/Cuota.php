@@ -30,5 +30,10 @@ class Cuota extends Model
 {
     return $this->belongsTo(Cliente::class, 'cliente_id');
 } 
+// En el modelo Cuota
+public function pagos()
+{
+    return $this->hasMany(Pago::class, 'cuota_id');
+}
 
 }

@@ -2,6 +2,7 @@
 namespace App\Models;
 
 use Carbon\Carbon;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 
@@ -19,6 +20,7 @@ class Prestamo extends Model
         'monto_total',
         'valor_cuota',
         'pdf',
+        'estado',
 
     ];
 
@@ -60,9 +62,14 @@ public function montoRestante()
     // Obtenemos la suma de todos los pagos realizados para este préstamo
     $pagosRealizados = $this->pagos()->sum('monto_abonado');
     
-    // Calculamos el monto restante restando los pagos realizados del monto total del préstamo
+    // Calculamos el monto restante
     $montoRestante = $this->monto_total - $pagosRealizados;
     
+    // Si el monto restante es 0 o menor, cambiamos el estado
+    if ($montoRestante <= 0) {
+        $this->update(['estado' => 'completado']);
+    }
+
     return max($montoRestante, 0); // Asegura que el monto restante no sea negativo
 }
 
@@ -74,7 +81,15 @@ public function cuotas()
     return $this->hasMany(Cuota::class);
 }
 
-
+// Método afterSave o afterUpdate para verificar el estado
+public static function afterSave($record)
+{
+    // Si el monto restante es 0, actualizamos el estado del préstamo
+    if ($record->montoRestante() <= 0) {
+        $record->estado = 'completado'; // O 'pagado'
+        $record->save();
+    }
+}
 
 
     // Relación con el modelo Pago

@@ -61,6 +61,7 @@ class CajaResource extends Resource
                             // Guardar los cambios en el mismo registro
                             $caja->save();
                         }
+                        
                     })
                     ->modalHeading('Refuerzo de Caja')
                     ->form([
